@@ -8,16 +8,35 @@
 #include <errno.h>
 #include <libnet.h>
 #include <libnetfilter_queue/libnetfilter_queue.h>
+#include <unordered_set>
+
+using namespace std;
 
 #define MAX_HOST_LEN 100
 
 int host_block = 0;
-char* target_host;
+unordered_set<string> s;
 
 void usage()
 {
-	printf("syntax : netfilter_block <host name>\n");
-	printf("sample : netfilter_block test.gilgil.net\n");
+	printf("syntax : multi_block\n");
+}
+
+void init_file()
+{
+    char buf[MAX_HOST_LEN];
+    FILE *f = fopen("top-1mm.txt","r");
+    if(f == NULL)
+        perror("Error opening file");
+    while(fgets(buf, sizeof(buf), f) != NULL)
+    {
+        //printf("Host inserted : %s", buf);
+        s.insert(buf);
+        memset(buf, 0, sizeof(buf));
+    }
+    printf("unordered set initialization completed.\n");
+    
+    fclose(f);
 }
 
 void block(int size, unsigned char* payload)
@@ -26,8 +45,8 @@ void block(int size, unsigned char* payload)
 	struct libnet_tcp_hdr* tcp;
 	unsigned char* data;
 	char* pos_host;
-	char host[MAX_HOST_LEN];
-	int host_len;
+	char host[MAX_HOST_LEN], www_host[MAX_HOST_LEN];
+	int host_len, is_www_host = 0;
 
 	ip = (struct libnet_ipv4_hdr*)payload;
 	if(ip->ip_p == 0x06) // if TCP
@@ -43,14 +62,26 @@ void block(int size, unsigned char* payload)
 
 				if(pos_host == NULL)
 					return;
+
+				is_www_host = 0;
+				memset(www_host, 0, sizeof(www_host));
 				pos_host += strlen("Host: ");
 				host_len = 0;
 				while(pos_host[host_len++] != 0x0d);
 				host_len--;
 				memcpy(host, pos_host, host_len);
+				host[host_len++] = '\n';
 				host[host_len] = '\0';
+				
+				//printf("Host : %s",host);
 
-				if(strcmp(host, target_host) == 0)
+				if(host[0] == 'w' && host[1] == 'w' && host[2] == 'w')
+				{
+					is_www_host = 1;
+					strcpy(www_host, host + 4);
+					//printf("wwwHost : %s",www_host);
+				}
+				if((is_www_host ? s.find(www_host) : s.find(host)) != s.end())
 				{
 					host_block = 1;
 					printf("target host blocked.\n");
@@ -93,20 +124,20 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 
 int main(int argc, char* argv[])
 {
-	if(argc != 2)
+	if(argc != 1)
 	{
 		usage();
 		return -1;
 	}
 	
-	target_host = argv[1];
-
 	struct nfq_handle *h;
     struct nfq_q_handle *qh;
     struct nfnl_handle *nh;
     int fd;
     int rv;
     char buf[4096] __attribute__ ((aligned));
+	
+	init_file();
 
     printf("opening library handle\n");
     h = nfq_open();
